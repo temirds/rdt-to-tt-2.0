@@ -1,1 +1,11 @@
+.gitattributes
 .idea
+.venv/
+.venv-cosyvoice/
+__pycache__/
+*.pyc
+out/
+voiceover/models
+voiceover/third_party/
+voiceover/cache/
+voiceover/__pycache__/

@@ -1,0 +1,12 @@
+{
+  "voiceover_engine": "cosyvoice",
+  "module_root": ".",
+  "cosyvoice_repo": "third_party/CosyVoice",
+  "cosyvoice_model": "models/Fun-CosyVoice3-0.5B",
+  "python": "../.venv-cosyvoice/Scripts/python.exe",
+  "cache_dir": "cache",
+  "device": "cpu",
+  "max_prompt_seconds": 12,
+  "default_instruction": "You are a Russian voice actor. Speak clearly and naturally, with warm male timbre and restrained emotion.<|endofprompt|>",
+  "voices_config": "voices.json"
+}
