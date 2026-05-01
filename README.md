@@ -1,6 +1,52 @@
 # rdt-to-tt-2.0
 
-Минимальный локальный модуль озвучки на CosyVoice3.
+Локальный пайплайн: сбор Reddit-тредов, перевод через NLLB и озвучка через CosyVoice3.
+
+## Установка
+
+Проверенный вариант для Windows: Python `3.10.x` и отдельное окружение `.venv-cosyvoice`.
+
+Установка зависимостей озвучки и перевода:
+
+```powershell
+py -3.10 -m venv .venv-cosyvoice
+.\.venv-cosyvoice\Scripts\Activate.ps1
+python -m pip install --upgrade pip wheel
+python -m pip install -r .\translator\requirements.txt
+python -m pip install -r .\voiceover\requirements.txt --no-build-isolation
+```
+
+`translator/requirements.txt` и `voiceover/requirements.txt` уже зафиксированы под `torch==2.7.1+cu128` и `torchaudio==2.7.1+cu128`, то есть под CUDA 12.8.
+
+Почему так:
+
+- `openai-whisper==20231117` в этом стеке ломается на свежем build-isolation с новым `setuptools`, поэтому установка запускается с `--no-build-isolation`.
+- В `voiceover/requirements.txt` уже добавлен `setuptools<81`, чтобы окружение оставалось совместимым с `openai-whisper`.
+- На практике проверен запуск на `Python 3.10.11`.
+
+Скачать модель перевода:
+
+```powershell
+huggingface-cli download facebook/nllb-200-3.3B --local-dir .\translator\models\nllb-200-3.3B
+```
+
+По умолчанию [translator/config.json](D:/shit/rdt-to-tt-2.0/translator/config.json:1) ожидает модель именно в `translator/models/nllb-200-3.3B` и работает в `local_files_only=true`.
+
+После установки проверьте, что путь в `voiceover/configs/cosyvoice.json` совпадает с локальным окружением:
+
+```json
+{
+  "python": "../.venv-cosyvoice/Scripts/python.exe"
+}
+```
+
+Быстрый smoke-test:
+
+```powershell
+python main.py --voice upvote_2 --text "Привет, это проверка запуска." --output out\smoke.wav
+```
+
+Ожидаемый результат: появится WAV-файл, а в консоли будет что-то вроде `Готово: ...\out\smoke.wav`.
 
 ## Как пользоваться
 
@@ -44,6 +90,20 @@ CLI:
 ```powershell
 python main.py --voice upvote --pitch -2 --speed 1.0 --text "Текст" --output out\test.wav
 ```
+
+Полный пайплайн для Reddit:
+
+```powershell
+python -m collector.cli --subreddit AskReddit --keyword lesson --keyword useful
+python main.py --voice upvote_2 --latest-thread
+```
+
+Для тредов из базы пайплайн теперь делает это по сегментам:
+
+- отдельно переводит вопрос
+- отдельно переводит каждый ответ
+- отдельно озвучивает вопрос и каждый ответ
+- склеивает итоговый WAV с паузами `1.0` сек после вопроса и `0.5` сек между ответами
 
 ## Модуль
 
@@ -116,3 +176,53 @@ Runtime-кэш направлен в `voiceover/cache` и игнорируетс
 - `voiceover/text.py` - предобработка текста, сейчас нормализация русских чисел.
 
 Чтобы заменить движок озвучки, добавьте новую реализацию `VoiceoverEngine`, зарегистрируйте ее в `voiceover/factory.py` и поменяйте `voiceover_engine` во внутреннем конфиге модуля.
+
+## Collector
+
+`collector` - модуль для выборки тредов Reddit, оценки их пригодности и сохранения в локальную SQLite-базу.
+
+Что хранится в `collector/data/`:
+
+- `collector/data/reddit.db` - SQLite база с таблицами `collector_threads` и `collector_comments`.
+- В `collector_threads` лежат метаданные поста, `question`, `answers_json`, служебный `original_text`, score анализа и сериализованные ответы.
+- В `collector_comments` лежат отдельные комментарии, привязанные к сохраненному треду.
+
+Запуск:
+
+```powershell
+python -m collector.cli --subreddit AskReddit --keyword lesson --keyword useful --flair Discussion
+```
+
+Локальный demo-режим без сети и без API ключа:
+
+```powershell
+python -m collector.cli --demo
+```
+
+Он создаст `collector/data/reddit.db` и сохранит туда встроенные демонстрационные треды.
+
+Пример вывода:
+
+```text
+Database: D:\shit\rdt-to-tt-2.0\collector\data\reddit.db
+Fetched: 2
+Prepared: 2
+Saved: 2
+Skipped: 0
+
+Saved previews:
+- [1] What habit improved your life the most?
+  question="What habit improved your life the most? Please share practical examples and why they worked."
+  answers_json[0]="Daily walking was the turning point for me..."
+```
+
+Зависимости модуля перечислены в `collector/requirements.txt`. Сейчас сам модуль использует только стандартную библиотеку Python.
+
+## Git Ignore
+
+В `.gitignore` уже исключены тяжелые артефакты:
+
+- локальные окружения и кэши
+- SQLite базы
+- папки моделей и runtime-кэшей
+- крупные бинарные веса: `*.bin`, `*.pt`, `*.pth`, `*.onnx`, `*.safetensors`, `*.ckpt`

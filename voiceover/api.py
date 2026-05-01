@@ -3,9 +3,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
-from .base import VoiceoverRequest, VoiceoverResult
+from .base import VoiceoverRequest, VoiceoverResult, VoiceoverSegment, VoiceoverSequenceRequest
 from .config import load_voice_profile, load_voiceover_config_bundle
 from .factory import create_voiceover_engine, prepare_voiceover_runtime as prepare_engine_runtime
 from .text import normalize_russian_numbers
@@ -48,6 +48,51 @@ def generate_voiceover(
     return engine.synthesize_to_file(
         VoiceoverRequest(
             text=prepared_text,
+            voice=voice,
+            output_path=output_path,
+            pitch=opts.pitch,
+            speed=opts.speed,
+        )
+    )
+
+
+def generate_voiceover_sequence(
+    segments: Sequence[VoiceoverSegment],
+    options: VoiceoverOptions | Mapping[str, Any] | None = None,
+    **overrides: Any,
+) -> VoiceoverResult:
+    opts = _build_options(options, overrides)
+    _validate_voice_controls(opts.pitch, opts.speed)
+    config_bundle = load_voiceover_config_bundle()
+    config = config_bundle.config
+    base_path = config_bundle.base_path
+
+    prepare_engine_runtime(config, Path(sys.argv[0]), sys.argv[1:], base_path)
+
+    prepared_segments: list[VoiceoverSegment] = []
+    for segment in segments:
+        prepared_text = segment.text.strip()
+        if not prepared_text:
+            continue
+        if opts.normalize_numbers:
+            prepared_text = normalize_russian_numbers(prepared_text)
+        prepared_segments.append(
+            VoiceoverSegment(
+                text=prepared_text,
+                pause_after_seconds=max(0.0, float(segment.pause_after_seconds)),
+            )
+        )
+
+    if not prepared_segments:
+        raise SystemExit("Text is empty.")
+
+    voice = load_voice_profile(config, opts.voice, base_path)
+    output_path = _resolve_output_path(base_path, opts)
+    engine = create_voiceover_engine(config, base_path)
+
+    return engine.synthesize_sequence_to_file(
+        VoiceoverSequenceRequest(
+            segments=tuple(prepared_segments),
             voice=voice,
             output_path=output_path,
             pitch=opts.pitch,

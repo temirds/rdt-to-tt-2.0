@@ -22,6 +22,21 @@ class VoiceoverRequest:
 
 
 @dataclass(frozen=True)
+class VoiceoverSegment:
+    text: str
+    pause_after_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class VoiceoverSequenceRequest:
+    segments: tuple[VoiceoverSegment, ...]
+    voice: VoiceProfile
+    output_path: Path
+    pitch: float = 0.0
+    speed: float = 1.0
+
+
+@dataclass(frozen=True)
 class VoiceoverResult:
     output_path: Path
     duration_seconds: float
@@ -30,4 +45,7 @@ class VoiceoverResult:
 
 class VoiceoverEngine(Protocol):
     def synthesize_to_file(self, request: VoiceoverRequest) -> VoiceoverResult:
+        ...
+
+    def synthesize_sequence_to_file(self, request: VoiceoverSequenceRequest) -> VoiceoverResult:
         ...

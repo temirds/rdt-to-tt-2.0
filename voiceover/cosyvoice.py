@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .base import VoiceoverRequest, VoiceoverResult
+from .base import VoiceoverRequest, VoiceoverResult, VoiceoverSequenceRequest
 from .config import resolve_project_path
 
 
@@ -64,14 +64,49 @@ class CosyVoiceVoiceoverEngine:
             max_seconds=self.settings.max_prompt_seconds,
         )
         try:
-            audio, sample_rate = synthesize(
-                model_dir=self.settings.model_path,
+            model = load_model(self.settings.model_path, self.settings.device)
+            audio, sample_rate = synthesize_with_model(
+                model=model,
                 text=request.text,
                 prompt_audio=prompt_audio,
                 prompt_text=prompt_text,
-                device=self.settings.device,
                 speed=request.speed,
             )
+            audio = apply_pitch_shift(audio, sample_rate, request.pitch)
+
+            duration = audio.shape[-1] / sample_rate
+            if duration < 0.5:
+                raise SystemExit(f"CosyVoice returned too short audio: {duration:.2f}s")
+
+            save_wav(request.output_path, audio, sample_rate)
+            return VoiceoverResult(
+                output_path=request.output_path,
+                duration_seconds=duration,
+                sample_rate=sample_rate,
+            )
+        finally:
+            if temp_prompt is not None:
+                temp_prompt.cleanup()
+
+    def synthesize_sequence_to_file(self, request: VoiceoverSequenceRequest) -> VoiceoverResult:
+        apply_local_cache(self.settings)
+        add_cosyvoice_to_path(self.settings)
+
+        prompt_audio, prompt_text, temp_prompt = prepare_prompt(
+            audio_path=request.voice.audio_path,
+            prompt_text=request.voice.prompt_text,
+            instruction=self.settings.default_instruction,
+            max_seconds=self.settings.max_prompt_seconds,
+        )
+        try:
+            model = load_model(self.settings.model_path, self.settings.device)
+            audio_parts, sample_rate = synthesize_sequence(
+                model=model,
+                request=request,
+                prompt_audio=prompt_audio,
+                prompt_text=prompt_text,
+            )
+            audio = concatenate_audio_parts(audio_parts)
             audio = apply_pitch_shift(audio, sample_rate, request.pitch)
 
             duration = audio.shape[-1] / sample_rate
@@ -186,6 +221,15 @@ def join_instruction(instruction: str, prompt_text: str) -> str:
     return f"{instruction}{prompt_text}"
 
 
+def load_model(model_dir: Path, device: str):
+    if device == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+    from cosyvoice.cli.cosyvoice import AutoModel
+
+    return AutoModel(model_dir=str(model_dir.resolve()))
+
+
 def synthesize(
     model_dir: Path,
     text: str,
@@ -194,13 +238,25 @@ def synthesize(
     device: str,
     speed: float,
 ):
-    if device == "cpu":
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    model = load_model(model_dir, device)
+    return synthesize_with_model(
+        model=model,
+        text=text,
+        prompt_audio=prompt_audio,
+        prompt_text=prompt_text,
+        speed=speed,
+    )
 
-    from cosyvoice.cli.cosyvoice import AutoModel
+
+def synthesize_with_model(
+    model,
+    text: str,
+    prompt_audio: str,
+    prompt_text: str,
+    speed: float,
+):
     import torch
 
-    model = AutoModel(model_dir=str(model_dir.resolve()))
     parts = []
     for item in model.inference_zero_shot(
         text,
@@ -216,6 +272,50 @@ def synthesize(
 
     audio = parts[0] if len(parts) == 1 else torch.cat(parts, dim=-1)
     return audio, model.sample_rate
+
+
+def synthesize_sequence(
+    model,
+    request: VoiceoverSequenceRequest,
+    prompt_audio: str,
+    prompt_text: str,
+):
+    import torch
+
+    audio_parts = []
+    sample_rate: int | None = None
+    channel_count: int | None = None
+
+    for segment in request.segments:
+        audio, current_sample_rate = synthesize_with_model(
+            model=model,
+            text=segment.text,
+            prompt_audio=prompt_audio,
+            prompt_text=prompt_text,
+            speed=request.speed,
+        )
+        if sample_rate is None:
+            sample_rate = current_sample_rate
+            channel_count = audio.shape[0]
+        audio_parts.append(audio)
+
+        pause_seconds = float(segment.pause_after_seconds)
+        if pause_seconds > 0:
+            pause_frames = max(1, int(round(sample_rate * pause_seconds)))
+            audio_parts.append(torch.zeros((channel_count, pause_frames), dtype=audio.dtype))
+
+    if sample_rate is None or channel_count is None or not audio_parts:
+        raise SystemExit("CosyVoice returned no audio.")
+
+    return audio_parts, sample_rate
+
+
+def concatenate_audio_parts(audio_parts):
+    import torch
+
+    if not audio_parts:
+        raise SystemExit("CosyVoice returned no audio.")
+    return audio_parts[0] if len(audio_parts) == 1 else torch.cat(audio_parts, dim=-1)
 
 
 def apply_pitch_shift(audio, sample_rate: int, pitch: float):

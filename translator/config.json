@@ -1,0 +1,20 @@
+{
+  "translation": {
+    "env_path": ".env",
+    "backend": "local_nllb",
+    "target_language": "ru",
+    "default_source_language": "en",
+    "timeout_seconds": 120,
+    "model_id": "facebook/nllb-200-3.3B",
+    "model_dir": "models/nllb-200-3.3B",
+    "hf_token_env": "HF_TOKEN",
+    "local_files_only": true,
+    "device": "auto",
+    "device_map": "auto",
+    "torch_dtype": "auto",
+    "max_input_chars": 1400,
+    "max_input_tokens": 512,
+    "max_new_tokens": 512,
+    "batch_size": 4
+  }
+}

@@ -1,0 +1,2 @@
+# Runtime dependencies for collector.
+# The current implementation uses only the Python standard library.

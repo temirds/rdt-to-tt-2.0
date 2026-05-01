@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.1+cu128
+torchaudio==2.7.1+cu128
+transformers>=4.49,<5
+accelerate>=1,<2
+sentencepiece>=0.2,<1
+safetensors>=0.4,<1
+huggingface_hub>=0.31,<1
