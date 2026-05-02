@@ -26,6 +26,10 @@ class CosyVoiceSettings:
     device: str
     default_instruction: str
     max_prompt_seconds: float = 12.0
+    max_prompt_chars: int = 80
+    log_level: str = "INFO"
+    modelscope_local_files_only: bool = True
+    show_progress: bool = False
 
     @classmethod
     def from_config(
@@ -46,6 +50,10 @@ class CosyVoiceSettings:
             device=str(config.get("device", "cpu")),
             default_instruction=str(config["default_instruction"]),
             max_prompt_seconds=float(config.get("max_prompt_seconds", 12.0)),
+            max_prompt_chars=int(config.get("max_prompt_chars", 80)),
+            log_level=str(config.get("log_level", "INFO")),
+            modelscope_local_files_only=bool(config.get("modelscope_local_files_only", True)),
+            show_progress=bool(config.get("show_progress", False)),
         )
 
 
@@ -62,9 +70,11 @@ class CosyVoiceVoiceoverEngine:
             prompt_text=request.voice.prompt_text,
             instruction=self.settings.default_instruction,
             max_seconds=self.settings.max_prompt_seconds,
+            max_chars=self.settings.max_prompt_chars,
+            target_text=request.text,
         )
         try:
-            model = load_model(self.settings.model_path, self.settings.device)
+            model = load_model(self.settings)
             audio, sample_rate = synthesize_with_model(
                 model=model,
                 text=request.text,
@@ -97,9 +107,11 @@ class CosyVoiceVoiceoverEngine:
             prompt_text=request.voice.prompt_text,
             instruction=self.settings.default_instruction,
             max_seconds=self.settings.max_prompt_seconds,
+            max_chars=self.settings.max_prompt_chars,
+            target_text=min((segment.text for segment in request.segments), key=len),
         )
         try:
-            model = load_model(self.settings.model_path, self.settings.device)
+            model = load_model(self.settings)
             audio_parts, sample_rate = synthesize_sequence(
                 model=model,
                 request=request,
@@ -158,6 +170,53 @@ def apply_local_cache(settings: CosyVoiceSettings) -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
+def configure_third_party_runtime(settings: CosyVoiceSettings) -> None:
+    import logging
+
+    logging.getLogger().setLevel(_resolve_log_level(settings.log_level))
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("modelscope").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+
+    if settings.device == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        try:
+            import torch
+
+            torch.cuda.is_available = lambda: False
+        except ImportError:
+            pass
+
+    if settings.modelscope_local_files_only:
+        patch_modelscope_snapshot_download_for_cache(settings.cache_dir)
+
+
+def _resolve_log_level(value: str) -> int:
+    import logging
+
+    return getattr(logging, value.strip().upper(), logging.ERROR)
+
+
+def patch_modelscope_snapshot_download_for_cache(cache_dir: Path) -> None:
+    wetext_cache = cache_dir.resolve() / "modelscope" / "hub" / "pengzhendong" / "wetext"
+    if not wetext_cache.exists():
+        return
+
+    try:
+        import modelscope
+    except ImportError:
+        return
+
+    original_snapshot_download = modelscope.snapshot_download
+
+    def snapshot_download_local_first(repo_id: str, *args, **kwargs):
+        if repo_id == "pengzhendong/wetext":
+            return str(wetext_cache)
+        return original_snapshot_download(repo_id, *args, **kwargs)
+
+    modelscope.snapshot_download = snapshot_download_local_first
+
+
 def add_cosyvoice_to_path(settings: CosyVoiceSettings) -> None:
     repo = settings.repo_path.resolve()
     if not repo.exists():
@@ -172,13 +231,19 @@ def prepare_prompt(
     prompt_text: str,
     instruction: str,
     max_seconds: float,
+    max_chars: int,
+    target_text: str | None = None,
 ) -> tuple[str, str, tempfile.TemporaryDirectory[str] | None]:
     import torchaudio
 
     audio, sample_rate = torchaudio.load(str(audio_path))
     duration = audio.shape[-1] / sample_rate
-    if duration <= max_seconds:
-        return str(audio_path.resolve()), join_instruction(instruction, prompt_text), None
+    max_chars = resolve_prompt_char_limit(
+        prompt_text=prompt_text,
+        instruction=instruction,
+        configured_max_chars=max_chars,
+        target_text=target_text,
+    )
 
     sentences = split_sentences(prompt_text) or [prompt_text]
     total_chars = max(1, sum(len(sentence) for sentence in sentences))
@@ -187,12 +252,20 @@ def prepare_prompt(
     selected_chars = 0
     for sentence in sentences:
         projected_seconds = duration * (selected_chars + len(sentence)) / total_chars
-        if selected and projected_seconds > max_seconds:
+        projected_chars = selected_chars + len(sentence)
+        if selected and (projected_seconds > max_seconds or projected_chars > max_chars):
             break
         selected.append(sentence)
         selected_chars += len(sentence)
 
     shortened_text = " ".join(selected).strip() or sentences[0]
+    if len(shortened_text) > max_chars:
+        shortened_text = shorten_text_by_chars(shortened_text, max_chars)
+        selected_chars = len(shortened_text)
+
+    if duration <= max_seconds and shortened_text == prompt_text.strip():
+        return str(audio_path.resolve()), join_instruction(instruction, prompt_text), None
+
     shortened_seconds = min(duration, max_seconds, duration * selected_chars / total_chars)
     frames = max(1, int(shortened_seconds * sample_rate))
 
@@ -206,8 +279,6 @@ def prepare_prompt(
         bits_per_sample=16,
     )
 
-    print(f"Prompt shortened: {duration:.2f}s -> {frames / sample_rate:.2f}s")
-    print(f"Prompt text shortened: {len(prompt_text)} -> {len(shortened_text)} chars")
     return str(temp_path), join_instruction(instruction, shortened_text), temp_dir
 
 
@@ -221,13 +292,17 @@ def join_instruction(instruction: str, prompt_text: str) -> str:
     return f"{instruction}{prompt_text}"
 
 
-def load_model(model_dir: Path, device: str):
-    if device == "cpu":
+def load_model(settings: CosyVoiceSettings):
+    if settings.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-    from cosyvoice.cli.cosyvoice import AutoModel
+    configure_third_party_runtime(settings)
+    from cosyvoice.cli import cosyvoice as cosyvoice_cli
 
-    return AutoModel(model_dir=str(model_dir.resolve()))
+    configure_third_party_runtime(settings)
+    if not settings.show_progress:
+        cosyvoice_cli.tqdm = lambda iterable, *args, **kwargs: iterable
+    return cosyvoice_cli.AutoModel(model_dir=str(settings.model_path.resolve()))
 
 
 def synthesize(
@@ -238,7 +313,15 @@ def synthesize(
     device: str,
     speed: float,
 ):
-    model = load_model(model_dir, device)
+    settings = CosyVoiceSettings(
+        repo_path=Path("."),
+        model_path=model_dir,
+        python_path=COSYVOICE_PYTHON,
+        cache_dir=Path("cache"),
+        device=device,
+        default_instruction="",
+    )
+    model = load_model(settings)
     return synthesize_with_model(
         model=model,
         text=text,
@@ -349,3 +432,26 @@ def save_wav(path: Path, audio, sample_rate: int) -> None:
 def split_sentences(text: str) -> list[str]:
     parts = re.split(r"(?<=[.!?…])\s+", text.strip())
     return [part.strip() for part in parts if part.strip()]
+
+
+def shorten_text_by_chars(text: str, max_chars: int) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text.strip()
+
+    shortened = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return shortened or text[:max_chars].strip()
+
+
+def resolve_prompt_char_limit(
+    prompt_text: str,
+    instruction: str,
+    configured_max_chars: int,
+    target_text: str | None,
+) -> int:
+    if target_text is None:
+        return configured_max_chars
+
+    instruction_len = len(join_instruction(instruction, ""))
+    target_len = len(target_text.strip())
+    warning_safe_limit = max(1, 2 * target_len - instruction_len)
+    return min(configured_max_chars, len(prompt_text.strip()), warning_safe_limit)

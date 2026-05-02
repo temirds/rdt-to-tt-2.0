@@ -136,8 +136,10 @@ voiceover/
   "python": "../.venv-cosyvoice/Scripts/python.exe",
   "cache_dir": "cache",
   "device": "cpu",
+  "default_pitch": 0.0,
+  "default_speed": 1.0,
   "max_prompt_seconds": 12,
-  "default_instruction": "You are a Russian voice actor. Speak clearly and naturally, with warm male timbre and restrained emotion.<|endofprompt|>",
+  "default_instruction": "Speak Russian naturally.<|endofprompt|>",
   "voices_config": "voices.json"
 }
 ```
@@ -152,7 +154,7 @@ Runtime-кэш направлен в `voiceover/cache` и игнорируетс
 
 Зависимости модуля описаны в `voiceover/requirements.txt`.
 
-Активный голос, имя выходного файла, pitch и speed не хранятся в конфиге. Это параметры конкретной генерации.
+Активный голос и имя выходного файла не хранятся в конфиге. `default_pitch` и `default_speed` задают дефолты модуля, а `--pitch` и `--speed` переопределяют их для конкретного запуска.
 
 ## Параметры
 
@@ -180,6 +182,14 @@ Runtime-кэш направлен в `voiceover/cache` и игнорируетс
 ## Collector
 
 `collector` - модуль для выборки тредов Reddit, оценки их пригодности и сохранения в локальную SQLite-базу.
+
+Ограничения длины настраиваются в [collector/config.json](D:/shit/rdt-to-tt-2.0/collector/config.json:1):
+
+- `collector.min_comment_length` - нижняя граница длины usable answer/comment в символах.
+- `reddit.max_question_length` - верхняя граница длины полного вопроса в символах.
+- `collector.max_comment_length` - верхняя граница длины usable answer/comment в символах.
+
+Перед сохранением `question` и `answers_json` коллектор чистит текст для озвучки: удаляет эмодзи, zero-width/control символы, URL, markdown-картинки, code blocks и reddit username/subreddit ссылки.
 
 Что хранится в `collector/data/`:
 

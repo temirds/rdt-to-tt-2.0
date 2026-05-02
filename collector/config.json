@@ -14,7 +14,8 @@
     "comments_fetch_limit": 500,
     "max_usable_comments": 8,
     "min_usable_comments": 5,
-    "min_comment_length": 80,
+    "min_comment_length": 10,
+    "max_comment_length": 900,
     "store_raw_payload": true,
     "duplicate_window_hours": 72,
     "source_name": "reddit",
@@ -86,6 +87,7 @@
     "min_comments": 6,
     "max_comment_count": 100,
     "min_question_length": 25,
+    "max_question_length": 500,
     "min_combined_text_length": 80,
     "require_questionish_title": false
   },

@@ -14,8 +14,8 @@ from .text import normalize_russian_numbers
 @dataclass(frozen=True)
 class VoiceoverOptions:
     voice: str | None = None
-    pitch: float = 0.0
-    speed: float = 1.0
+    pitch: float | None = None
+    speed: float | None = None
     output_path: Path | None = None
     output_dir: Path | None = None
     filename: str | None = None
@@ -28,10 +28,11 @@ def generate_voiceover(
     **overrides: Any,
 ) -> VoiceoverResult:
     opts = _build_options(options, overrides)
-    _validate_voice_controls(opts.pitch, opts.speed)
     config_bundle = load_voiceover_config_bundle()
     config = config_bundle.config
     base_path = config_bundle.base_path
+    pitch, speed = _resolve_voice_controls(opts, config)
+    _validate_voice_controls(pitch, speed)
 
     prepare_engine_runtime(config, Path(sys.argv[0]), sys.argv[1:], base_path)
 
@@ -50,8 +51,8 @@ def generate_voiceover(
             text=prepared_text,
             voice=voice,
             output_path=output_path,
-            pitch=opts.pitch,
-            speed=opts.speed,
+            pitch=pitch,
+            speed=speed,
         )
     )
 
@@ -62,10 +63,11 @@ def generate_voiceover_sequence(
     **overrides: Any,
 ) -> VoiceoverResult:
     opts = _build_options(options, overrides)
-    _validate_voice_controls(opts.pitch, opts.speed)
     config_bundle = load_voiceover_config_bundle()
     config = config_bundle.config
     base_path = config_bundle.base_path
+    pitch, speed = _resolve_voice_controls(opts, config)
+    _validate_voice_controls(pitch, speed)
 
     prepare_engine_runtime(config, Path(sys.argv[0]), sys.argv[1:], base_path)
 
@@ -95,8 +97,8 @@ def generate_voiceover_sequence(
             segments=tuple(prepared_segments),
             voice=voice,
             output_path=output_path,
-            pitch=opts.pitch,
-            speed=opts.speed,
+            pitch=pitch,
+            speed=speed,
         )
     )
 
@@ -130,6 +132,12 @@ def _validate_voice_controls(pitch: float, speed: float) -> None:
         raise SystemExit("pitch must be between -12.0 and 12.0 semitones.")
     if not 0.5 <= float(speed) <= 2.0:
         raise SystemExit("speed must be between 0.5 and 2.0.")
+
+
+def _resolve_voice_controls(options: VoiceoverOptions, config: Mapping[str, Any]) -> tuple[float, float]:
+    pitch = options.pitch if options.pitch is not None else config.get("default_pitch", 0.0)
+    speed = options.speed if options.speed is not None else config.get("default_speed", 1.0)
+    return float(pitch), float(speed)
 
 
 def _resolve_output_path(

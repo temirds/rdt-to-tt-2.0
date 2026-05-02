@@ -2,19 +2,22 @@ from __future__ import annotations
 
 from .base import AnalysisResult, RedditPost
 from .config import CollectorConfig, CollectorQuery
-from .formatter import build_question, question_contains_excluded_keywords
+from .formatter import build_question, question_contains_excluded_keywords, sanitize_text_for_voiceover
 
 
 def passes_metadata_precheck(post: RedditPost, query: CollectorQuery, config: CollectorConfig) -> bool:
     haystack = " ".join(filter(None, [post.title, post.body, post.flair or ""])).lower()
     title = post.title.strip()
     question_text = build_question(post)
+    question_length = len(sanitize_text_for_voiceover(question_text))
 
     if post.score < query.min_score:
         return False
     if post.comment_count < query.min_comments:
         return False
     if len(title) < query.min_question_length:
+        return False
+    if question_length > query.max_question_length:
         return False
     if len(title) + len(post.body.strip()) < query.min_combined_text_length:
         return False
@@ -42,11 +45,14 @@ def analyze_post(post: RedditPost, query: CollectorQuery, config: CollectorConfi
     matched_keywords = tuple(sorted({keyword for keyword in query.keywords if keyword.lower() in haystack}))
     score = 0.0
     combined_length = len(post.title.strip()) + len(post.body.strip())
+    question_length = len(sanitize_text_for_voiceover(question_text))
     viable_comments = [
-        comment for comment in post.comments if len(comment.body.strip()) >= config.min_comment_length
+        comment
+        for comment in post.comments
+        if config.min_comment_length <= _voiceover_text_length(comment.body) <= config.max_comment_length
     ]
     unique_authors = {comment.author.strip().lower() for comment in viable_comments if comment.author.strip()}
-    total_answer_chars = sum(len(comment.body.strip()) for comment in viable_comments)
+    total_answer_chars = sum(_voiceover_text_length(comment.body) for comment in viable_comments)
 
     if post.score >= query.min_score:
         score += 2.0
@@ -94,6 +100,13 @@ def analyze_post(post: RedditPost, query: CollectorQuery, config: CollectorConfi
         score -= 0.5
         reasons.append("question_too_short")
 
+    if question_length <= query.max_question_length:
+        score += 0.5
+        reasons.append(f"question_chars<={query.max_question_length}")
+    else:
+        score -= 2.0
+        reasons.append(f"question_chars>{query.max_question_length}")
+
     if combined_length >= query.min_combined_text_length:
         score += 0.5
         reasons.append("combined_length_ok")
@@ -138,10 +151,19 @@ def analyze_post(post: RedditPost, query: CollectorQuery, config: CollectorConfi
         score -= 1.0
         reasons.append(f"answer_chars<{config.analysis_min_total_answer_chars}")
 
-    accepted = score >= config.analysis_min_accepted_score and not blocked and bool(viable_comments)
+    accepted = (
+        score >= config.analysis_min_accepted_score
+        and question_length <= query.max_question_length
+        and not blocked
+        and bool(viable_comments)
+    )
     return AnalysisResult(
         accepted=accepted,
         score=round(score, 2),
         reasons=tuple(reasons),
         matched_keywords=matched_keywords,
     )
+
+
+def _voiceover_text_length(text: str) -> int:
+    return len(sanitize_text_for_voiceover(text))

@@ -166,6 +166,7 @@ class CollectorService:
         answers = build_answers(
             post,
             min_comment_length=self.config.min_comment_length,
+            max_comment_length=self.config.max_comment_length,
             excluded_keywords=query.answer_excluded_keywords,
         )
         if len(answers) < self.config.min_usable_comments:

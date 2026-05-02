@@ -71,8 +71,8 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translate Reddit threads from SQLite and synthesize Russian voiceover.")
     parser.add_argument("--voice", help="Voice name from voiceover voices config.")
-    parser.add_argument("--pitch", type=float, default=0.0, help="Pitch shift in semitones, from -12 to 12.")
-    parser.add_argument("--speed", type=float, default=1.0, help="Speech speed multiplier, from 0.5 to 2.0.")
+    parser.add_argument("--pitch", type=float, default=None, help="Pitch shift in semitones, from -12 to 12.")
+    parser.add_argument("--speed", type=float, default=None, help="Speech speed multiplier, from 0.5 to 2.0.")
     parser.add_argument("--text", help="Source text to translate and synthesize.")
     parser.add_argument("--file", help="UTF-8 text file to translate and synthesize.")
     parser.add_argument("--source-language", default=None, help="Source language for --text/--file, e.g. en or ru.")

@@ -6,7 +6,12 @@
   "python": "../.venv-cosyvoice/Scripts/python.exe",
   "cache_dir": "cache",
   "device": "cpu",
+  "default_pitch": 0.0,
+  "default_speed": 1.0,
   "max_prompt_seconds": 12,
-  "default_instruction": "You are a Russian voice actor. Speak clearly and naturally, with warm male timbre and restrained emotion.<|endofprompt|>",
+  "max_prompt_chars": 80,
+  "log_level": "INFO",
+  "modelscope_local_files_only": true,
+  "default_instruction": "Speak Russian naturally.<|endofprompt|>",
   "voices_config": "voices.json"
 }
