@@ -1,0 +1,16 @@
+{
+  "downloader": {
+    "default_provider": "youtube",
+    "default_output_dir": "../input",
+    "filename_template": "%(title).180B [%(id)s].%(ext)s",
+    "default_quality": "1080p",
+    "with_audio": false,
+    "prefer_mp4": true,
+    "no_playlist": true,
+    "retries": 10,
+    "fragment_retries": 10,
+    "socket_timeout": 30,
+    "cookies_path": "cookies.txt",
+    "ffmpeg_location": null
+  }
+}

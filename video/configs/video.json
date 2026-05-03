@@ -1,0 +1,37 @@
+{
+  "video": {
+    "env_path": ".env",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "crf": 20,
+    "preset": "veryfast",
+    "backgrounds_dir": "assets/backgrounds",
+    "cache_dir": "cache",
+    "ffmpeg_path": "ffmpeg",
+    "ffprobe_path": "ffprobe",
+    "default_output_dir": "../out",
+    "min_background_seconds": 8.0
+  },
+  "backgrounds": {
+    "default_tags": ["satisfying", "driving", "city", "nature"],
+    "tags": {
+      "minecraft": [],
+      "subway": [],
+      "satisfying": [],
+      "driving": [],
+      "cooking": [],
+      "nature": [],
+      "city": [],
+      "fitness": []
+    },
+    "urls": []
+  },
+  "style": {
+    "font_name": "Arial",
+    "question_font_size": 58,
+    "answer_font_size": 64,
+    "text_margin_v": 260,
+    "text_margin_h": 90
+  }
+}

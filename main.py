@@ -12,6 +12,7 @@ from pathlib import Path
 
 from collector.config import load_collector_settings
 from translator import TranslatorService, load_translation_settings
+from video import VideoOptions, VideoSegment, generate_video
 from voiceover import VoiceoverOptions, VoiceoverSegment, generate_voiceover, generate_voiceover_sequence
 
 
@@ -65,6 +66,25 @@ def main() -> int:
 
     print(f"Audio: {result.output_path}")
     print(f"Duration: {result.duration_seconds:.2f} sec")
+    if args.video:
+        video_output_path = resolve_video_output_path(args, source, result.output_path)
+        log_message("Сборка видео началась")
+        video_started_at = time.perf_counter()
+        video_result = generate_video(
+            build_video_segments(translated_segments),
+            VideoOptions(
+                audio_path=result.output_path,
+                output_path=video_output_path,
+                duration_seconds=result.duration_seconds,
+                background_path=Path(args.background).resolve() if args.background else None,
+                background_tags=tuple(args.background_tag or ()),
+                config_path=Path(args.video_config).resolve() if args.video_config else None,
+                auto_fetch_background=not args.no_auto_fetch_background,
+            ),
+        )
+        log_message_with_duration("Сборка видео закончилась", video_started_at)
+        print(f"Video: {video_result.output_path}")
+        print(f"Background: {video_result.background_path}")
     return 0
 
 
@@ -83,6 +103,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--translator-config", default=None, help="Path to translator config.json.")
     parser.add_argument("--translated-text-output", help="Path to save the translated UTF-8 text.")
     parser.add_argument("-o", "--output", help="Output WAV path.")
+    parser.add_argument("--video", action="store_true", help="Render vertical TikTok MP4 after voiceover.")
+    parser.add_argument("--video-output", help="Output MP4 path.")
+    parser.add_argument("--background", help="Local background video path for MP4 rendering.")
+    parser.add_argument(
+        "--background-tag",
+        action="append",
+        help="Background content tag, e.g. minecraft, satisfying, driving. Can be repeated.",
+    )
+    parser.add_argument("--video-config", help="Path to video config.json.")
+    parser.add_argument(
+        "--no-auto-fetch-background",
+        action="store_true",
+        help="Do not download direct-URL background clips if local videos are missing.",
+    )
     return parser.parse_args()
 
 
@@ -281,6 +315,31 @@ def resolve_audio_output_path(args: argparse.Namespace, source: PipelineSource) 
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return output_dir / f"{build_output_stem(source)}_{timestamp}.wav"
+
+
+def resolve_video_output_path(args: argparse.Namespace, source: PipelineSource, audio_output_path: Path) -> Path:
+    if args.video_output:
+        output_path = Path(args.video_output)
+        return output_path if output_path.is_absolute() else (ROOT_PATH / output_path).resolve()
+
+    if args.output:
+        return audio_output_path.with_suffix(".mp4")
+
+    output_dir = ROOT_PATH / "out"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return output_dir / f"{build_output_stem(source)}_{timestamp}.mp4"
+
+
+def build_video_segments(translated_segments: tuple[SourceSegment, ...]) -> tuple[VideoSegment, ...]:
+    return tuple(
+        VideoSegment(
+            text=segment.text,
+            pause_after_seconds=segment.pause_after_seconds,
+            role="question" if index == 0 and len(translated_segments) > 1 else "answer",
+        )
+        for index, segment in enumerate(translated_segments)
+    )
 
 
 def save_text(path: Path, text: str) -> None:

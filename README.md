@@ -98,12 +98,49 @@ python -m collector.cli --subreddit AskReddit --keyword lesson --keyword useful
 python main.py --voice upvote_2 --latest-thread
 ```
 
+Полный пайплайн с вертикальным MP4:
+
+```powershell
+python main.py --voice upvote_2 --latest-thread --video
+```
+
+Для рендера видео нужен `ffmpeg` в `PATH`. Фоновые клипы модуль ищет в `video/assets/backgrounds/`.
+Практичный вариант - держать свою локальную библиотеку клипов:
+
+```text
+video/assets/backgrounds/
+  minecraft/
+    clip_01.mp4
+  satisfying/
+    clip_01.mp4
+  driving/
+    clip_01.mp4
+```
+
+Для выбора контента фона используйте теги. Теги совпадают с подпапками и ключами из `video/configs/video.json`, поле `backgrounds.tags`:
+
+```powershell
+python main.py --voice upvote_2 --latest-thread --video --background-tag minecraft
+python main.py --voice upvote_2 --latest-thread --video --background-tag satisfying --background-tag driving
+```
+
+Если локальных клипов нет, модуль может скачать фон только по прямым ссылкам из `video/configs/video.json`. Это не stock API: вы сами добавляете проверенные `.mp4/.mov/.mkv/.webm` URL в `backgrounds.urls` или в нужный тег `backgrounds.tags.minecraft`. Скачанные файлы сохраняются в `video/cache/backgrounds/` и переиспользуются между запусками.
+
+Во время запуска видео-модуль пишет прогресс в консоль: сколько локальных клипов найдено, какие прямые ссылки доступны, сколько файлов взято из кэша и сколько скачано.
+
+Можно указать конкретный фон и выходной MP4:
+
+```powershell
+python main.py --voice upvote_2 --latest-thread --video --background path\to\background.mp4 --video-output out\final.mp4
+```
+
 Для тредов из базы пайплайн теперь делает это по сегментам:
 
 - отдельно переводит вопрос
 - отдельно переводит каждый ответ
 - отдельно озвучивает вопрос и каждый ответ
 - склеивает итоговый WAV с паузами `1.0` сек после вопроса и `0.5` сек между ответами
+- при `--video` собирает вертикальный MP4 `1080x1920` с фоновым клипом, аудио и ASS-субтитрами
 
 ## Модуль
 
@@ -178,6 +215,134 @@ Runtime-кэш направлен в `voiceover/cache` и игнорируетс
 - `voiceover/text.py` - предобработка текста, сейчас нормализация русских чисел.
 
 Чтобы заменить движок озвучки, добавьте новую реализацию `VoiceoverEngine`, зарегистрируйте ее в `voiceover/factory.py` и поменяйте `voiceover_engine` во внутреннем конфиге модуля.
+
+## Video
+
+`video` - модуль для сборки вертикального TikTok-видеоряда поверх готовой озвучки.
+
+```text
+video/
+  configs/video.json
+  api.py
+  assets.py
+  base.py
+  config.py
+  renderer.py
+  subtitles.py
+  timeline.py
+```
+
+Публичный фасад:
+
+```python
+from video import VideoOptions, VideoSegment, generate_video
+
+result = generate_video(
+    [
+        VideoSegment("Вопрос треда", role="question", pause_after_seconds=1.0),
+        VideoSegment("Ответ пользователя", role="answer"),
+    ],
+    VideoOptions(
+        audio_path="out/audio.wav",
+        output_path="out/final.mp4",
+    ),
+)
+```
+
+Фоновые клипы:
+
+- локальные: `video/assets/backgrounds/`, включая подпапки тегов вроде `minecraft/` или `satisfying/`
+- прямые URL из `video/configs/video.json`, кэшируются в `video/cache/backgrounds/`
+- временные reels: `video/cache/tmp/`, удаляются после рендера
+- теги фона: `minecraft`, `subway`, `satisfying`, `driving`, `cooking`, `nature`, `city`, `fitness`
+
+Без локальных клипов и без прямых URL рендер остановится с объяснением, куда положить фон или где настроить ссылки.
+
+## Downloader
+
+`downloader` - модуль для скачивания медиа в локальную папку. Сейчас подключен один провайдер: `youtube` через `yt-dlp`, но публичный API и Web UI уже используют поле `provider`, чтобы позже добавить другие источники.
+
+Установка зависимости:
+
+```powershell
+python -m pip install -r .\downloader\requirements.txt
+```
+
+Локальный Web UI:
+
+```powershell
+python -m downloader.web
+```
+
+После запуска откройте:
+
+- `http://127.0.0.1:8765` - скачивание YouTube-видео.
+- `http://127.0.0.1:8765/editor` - просмотр и обрезка скачанных видео.
+
+На странице скачивания можно вставить URL, выбрать качество, папку вывода, cookies/ffmpeg и запустить скачивание. Прогресс и итоговые пути показываются в блоке статуса.
+
+Если порт занят:
+
+```powershell
+python -m downloader.web --port 8766
+```
+
+Скачать видео в папку по умолчанию `out/youtube`:
+
+```powershell
+python -m downloader.cli "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+Скачать в конкретную папку и ограничить качество:
+
+```powershell
+python -m downloader.cli "https://www.youtube.com/watch?v=VIDEO_ID" --output-dir out\raw_videos --quality 1080p
+```
+
+Если YouTube пишет `Sign in to confirm you're not a bot`, экспортируйте cookies из браузерного расширения в `cookies.json`, конвертируйте в Netscape `cookies.txt` и укажите этот файл. По умолчанию модуль использует `downloader/cookies.txt`.
+
+```powershell
+python -m downloader.cli --parse-cookies path\to\cookies.json --cookies-output downloader\cookies.txt
+python -m downloader.cli "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+В Web UI укажите путь к `cookies.json` и нажмите `Parse cookies`. Файл будет сохранен как `downloader/cookies.txt`, а путь автоматически попадет в поле `cookies.txt`. Если `cookies.json` указан при нажатии `Download`, Web UI сначала перепарсит cookies, затем запустит скачивание с полученным `cookies.txt`.
+
+Видео-редактор:
+
+- список файлов берется из папки вывода downloader;
+- видео открывается в браузерном preview;
+- таймлайн хранит список независимых клипов, а не декоративные метки поверх исходника;
+- при открытии видео создается один клип, который ссылается на весь исходный файл;
+- кнопка `✂` слева от таймлайна разрезает клип под playhead на два независимых клипа;
+- каждый клип можно выбрать отдельно кликом на таймлайне;
+- клип можно двигать по таймлайну перетаскиванием;
+- края клипа можно двигать ручками, укорачивая или растягивая клип только в пределах исходного видео;
+- кнопка `⌫` удаляет выбранный клип;
+- кнопка `↺` сбрасывает таймлайн к одному полному клипу;
+- `Set start` и `Set end` ставят границы выбранного клипа по текущему времени preview;
+- `Result name` задает имя итогового файла без расширения;
+- `Export` собирает итоговое видео только из клипов, которые остались на таймлайне;
+- экспорт идет подряд в порядке расположения клипов на таймлайне, пустоты между клипами в простой версии не сохраняются;
+- `Re-encode export` использует ffmpeg concat через фильтры для точной сборки результата.
+
+Публичный фасад:
+
+```python
+from downloader import DownloadOptions, download
+
+results = download(
+    "https://www.youtube.com/watch?v=VIDEO_ID",
+    DownloadOptions(provider="youtube", output_dir="out/raw_videos", quality="1080p"),
+)
+
+for result in results:
+    print(result.success, result.filepaths)
+```
+
+Совместимые алиасы `YoutubeDownloadOptions` и `download_youtube` пока оставлены внутри `downloader`, но новый код лучше писать через `DownloadOptions` и `download`.
+
+Внутренние настройки лежат в `downloader/configs/downloader.json`. Для высоких качеств с раздельными video/audio потоками нужен `ffmpeg` в `PATH`.
 
 ## Collector
 

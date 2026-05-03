@@ -23,6 +23,14 @@ voiceover/models
 voiceover/third_party/
 voiceover/cache/
 voiceover/__pycache__/
+video/cache/
+video/assets/backgrounds/
+video/.env
+video/__pycache__/
+downloader/cookies.json
+downloader/cookies.txt
+downloader/__pycache__/
+input/
 *.ckpt
 *.pt
 *.pth
