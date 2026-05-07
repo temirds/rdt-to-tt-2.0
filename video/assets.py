@@ -40,7 +40,8 @@ def resolve_backgrounds(
     local = list_local_backgrounds(config, selected_tags)
     log_video(f"Фон: локальных клипов найдено {len(local)}")
     if local:
-        selected = tuple(random.sample(local, k=min(len(local), target_count)))
+        selected_count = len(local) if target_count <= 0 else min(len(local), target_count)
+        selected = tuple(random.sample(local, k=selected_count))
         log_video(f"Фон: используем локальную библиотеку, выбрано {len(selected)}")
         return selected
 

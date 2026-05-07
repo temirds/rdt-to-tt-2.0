@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import sqlite3
+import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
 from collector.config import load_collector_settings
 from translator import TranslatorService, load_translation_settings
 from video import VideoOptions, VideoSegment, generate_video
+from video.config import DEFAULT_CONFIG_PATH as DEFAULT_VIDEO_CONFIG_PATH, load_video_settings
 from voiceover import VoiceoverOptions, VoiceoverSegment, generate_voiceover, generate_voiceover_sequence
 
 
@@ -55,13 +58,12 @@ def main() -> int:
         print(translated_text)
         return 0
 
-    if not args.voice:
-        raise SystemExit("Pass --voice for voiceover generation or use --translate-only.")
-
     output_path = resolve_audio_output_path(args, source)
     log_message("Озвучка началась")
     voiceover_started_at = time.perf_counter()
     result = synthesize_translated_segments(translated_segments, args, output_path)
+    ensure_voiceover_timings(result.output_path, translated_segments, result.duration_seconds)
+    result = add_sfx_to_voiceover(result, translated_segments, args)
     log_message_with_duration("Озвучка закончилась", voiceover_started_at)
 
     print(f"Audio: {result.output_path}")
@@ -90,7 +92,7 @@ def main() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translate Reddit threads from SQLite and synthesize Russian voiceover.")
-    parser.add_argument("--voice", help="Voice name from voiceover voices config.")
+    parser.add_argument("--voice", default="upvote_3", help="Voice name from voiceover voices config.")
     parser.add_argument("--pitch", type=float, default=None, help="Pitch shift in semitones, from -12 to 12.")
     parser.add_argument("--speed", type=float, default=None, help="Speech speed multiplier, from 0.5 to 2.0.")
     parser.add_argument("--text", help="Source text to translate and synthesize.")
@@ -292,6 +294,180 @@ def synthesize_translated_segments(
     )
 
 
+def add_sfx_to_voiceover(result, translated_segments: tuple[SourceSegment, ...], args: argparse.Namespace):
+    sfx_times = build_sfx_times_from_timings(result.output_path) or build_sfx_times_for_segments(
+        translated_segments,
+        result.duration_seconds,
+    )
+    if not sfx_times:
+        return result
+
+    settings = load_video_settings(Path(args.video_config) if args.video_config else DEFAULT_VIDEO_CONFIG_PATH)
+    sfx_path = select_random_audio(settings.config.sfx_dir)
+    if sfx_path is None:
+        return result
+
+    log_message(f"Озвучка: добавляем SFX {sfx_path.name} между комментариями, точек {len(sfx_times)}")
+    output_path = Path(result.output_path).resolve()
+    temp_path = output_path.with_name(f"{output_path.stem}_with_sfx{output_path.suffix}")
+    command = [
+        settings.config.ffmpeg_path,
+        "-y",
+        "-i",
+        str(output_path),
+    ]
+    for _ in sfx_times:
+        command.extend(["-i", str(sfx_path)])
+
+    filter_parts = ["[0:a]asetpts=PTS-STARTPTS[voice]"]
+    mix_inputs = ["[voice]"]
+    for index, seconds in enumerate(sfx_times):
+        delay_ms = max(0, int(round(seconds * 1000)))
+        filter_parts.append(
+            f"[{index + 1}:a]volume={settings.config.sfx_volume},"
+            f"adelay={delay_ms}:all=1[sfx{index}]"
+        )
+        mix_inputs.append(f"[sfx{index}]")
+    filter_parts.append(
+        "".join(mix_inputs)
+        + f"amix=inputs={len(mix_inputs)}:duration=longest:dropout_transition=0[aout]"
+    )
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[aout]",
+            "-c:a",
+            "pcm_s16le",
+            str(temp_path),
+        ]
+    )
+    run_command(command, "SFX mix failed")
+    temp_path.replace(output_path)
+    return replace(
+        result,
+        duration_seconds=probe_audio_duration(settings.config.ffprobe_path, output_path),
+    )
+
+
+def ensure_voiceover_timings(
+    audio_path: Path,
+    segments: tuple[SourceSegment, ...],
+    duration_seconds: float,
+) -> None:
+    timings_path = Path(audio_path).with_suffix(".timings.json")
+    if timings_path.exists():
+        return
+    prepared = tuple(segment for segment in segments if segment.text.strip())
+    if not prepared:
+        return
+    total_pause = sum(max(0.0, segment.pause_after_seconds) for segment in prepared)
+    speech_duration = max(0.001, duration_seconds - total_pause)
+    weights = [max(1, len(segment.text.split())) for segment in prepared]
+    total_weight = sum(weights) or 1
+    cursor = 0.0
+    payload_segments = []
+    for index, segment in enumerate(prepared):
+        segment_speech = speech_duration * weights[index] / total_weight
+        if index == len(prepared) - 1:
+            segment_end = max(cursor, duration_seconds - max(0.0, segment.pause_after_seconds))
+        else:
+            segment_end = cursor + segment_speech
+        payload_segments.append(
+            {
+                "text": segment.text,
+                "start_seconds": cursor,
+                "end_seconds": segment_end,
+                "pause_after_seconds": max(0.0, segment.pause_after_seconds),
+            }
+        )
+        cursor = segment_end + max(0.0, segment.pause_after_seconds)
+    timings_path.write_text(
+        json.dumps({"segments": payload_segments}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def build_sfx_times_for_segments(segments: tuple[SourceSegment, ...], duration_seconds: float) -> tuple[float, ...]:
+    # Prefer exact word/chunk timings saved by the TTS sequence. The caller passes source
+    # segments, so this fallback is used only when no sidecar timing file exists.
+    prepared = tuple(segment for segment in segments if segment.text.strip())
+    if len(prepared) <= 1:
+        return ()
+    total_pause = sum(max(0.0, segment.pause_after_seconds) for segment in prepared)
+    speech_duration = max(0.001, duration_seconds - total_pause)
+    weights = [max(1, len(segment.text.split())) for segment in prepared]
+    total_weight = sum(weights) or 1
+    times: list[float] = []
+    cursor = 0.0
+    for index, segment in enumerate(prepared[:-1]):
+        cursor += speech_duration * weights[index] / total_weight
+        if segment.pause_after_seconds > 0:
+            times.append(min(max(0.0, cursor), max(0.0, duration_seconds - 0.05)))
+        cursor += max(0.0, segment.pause_after_seconds)
+    return tuple(times)
+
+
+def build_sfx_times_from_timings(audio_path: Path) -> tuple[float, ...]:
+    timings_path = Path(audio_path).with_suffix(".timings.json")
+    if not timings_path.exists():
+        return ()
+    try:
+        payload = json.loads(timings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ()
+    times: list[float] = []
+    for item in payload.get("segments") or ():
+        try:
+            pause = float(item.get("pause_after_seconds") or 0.0)
+            end = float(item.get("end_seconds"))
+        except Exception:
+            continue
+        if pause > 0:
+            times.append(max(0.0, end))
+    return tuple(times)
+
+
+def select_random_audio(directory: Path) -> Path | None:
+    if not directory.exists():
+        return None
+    extensions = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+    candidates = [path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in extensions]
+    return random.choice(candidates).resolve() if candidates else None
+
+
+def probe_audio_duration(ffprobe_path: str, audio_path: Path) -> float:
+    command = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(audio_path),
+    ]
+    completed = run_command(command, "ffprobe failed", capture=True)
+    return float(json.loads(completed.stdout)["format"]["duration"])
+
+
+def run_command(command: list[str], error_message: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"{command[0]} not found. Install ffmpeg and make sure it is in PATH.") from exc
+    except subprocess.CalledProcessError as exc:
+        details = exc.stderr.strip() if exc.stderr else str(exc)
+        raise SystemExit(f"{error_message}: {details}") from exc
+
+
 def resolve_text_output_path(args: argparse.Namespace, source: PipelineSource) -> Path | None:
     if args.translated_text_output:
         path = Path(args.translated_text_output)
@@ -314,7 +490,7 @@ def resolve_audio_output_path(args: argparse.Namespace, source: PipelineSource) 
     output_dir = ROOT_PATH / "out"
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return output_dir / f"{build_output_stem(source)}_{timestamp}.wav"
+    return output_dir / f"{build_output_stem(source, max_slug_chars=40)}_{timestamp}.wav"
 
 
 def resolve_video_output_path(args: argparse.Namespace, source: PipelineSource, audio_output_path: Path) -> Path:
@@ -328,7 +504,7 @@ def resolve_video_output_path(args: argparse.Namespace, source: PipelineSource, 
     output_dir = ROOT_PATH / "out"
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return output_dir / f"{build_output_stem(source)}_{timestamp}.mp4"
+    return output_dir / f"{build_output_stem(source, max_slug_chars=40)}_{timestamp}.mp4"
 
 
 def build_video_segments(translated_segments: tuple[SourceSegment, ...]) -> tuple[VideoSegment, ...]:
@@ -371,18 +547,18 @@ def log_message_with_duration(message: str, started_at: float) -> None:
     log_message(f"{message} ({duration_seconds:.1f} сек)")
 
 
-def build_output_stem(source: PipelineSource) -> str:
+def build_output_stem(source: PipelineSource, max_slug_chars: int = 80) -> str:
     title = source.title or source.external_id or "thread"
-    slug = slugify(title)
+    slug = slugify(title, max_chars=max_slug_chars)
     if source.thread_id is not None:
         return f"thread_{source.thread_id}_{slug}"
     return slug
 
 
-def slugify(value: str) -> str:
+def slugify(value: str, max_chars: int = 80) -> str:
     slug = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ]+", "_", value.strip().lower())
     slug = re.sub(r"_+", "_", slug).strip("_")
-    return slug[:80] or "output"
+    return slug[:max_chars] or "output"
 
 
 def clean_text(text: str) -> str:

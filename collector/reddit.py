@@ -16,6 +16,14 @@ from .config import CollectorConfig, CollectorQuery
 REDDIT_BASE_URL = "https://www.reddit.com"
 
 
+class RedditRequestError(RuntimeError):
+    def __init__(self, status_code: int | None, path: str, details: str) -> None:
+        self.status_code = status_code
+        self.path = path
+        self.details = details
+        super().__init__(f"Reddit HTTP error {status_code} for {path}: {details}")
+
+
 @dataclass(frozen=True)
 class RedditClient:
     config: CollectorConfig
@@ -25,30 +33,74 @@ class RedditClient:
         keywords = self._get_keywords_for_run(query)
         for subreddit in query.subreddits:
             if keywords:
+                search_failed = False
                 for keyword in keywords:
-                    listing = self._load_json(
-                        f"/r/{subreddit}/search.json",
-                        {
-                            "q": keyword,
-                            "restrict_sr": "1",
-                            "sort": query.sort,
-                            "t": query.timeframe,
-                            "limit": str(self.config.search_batch_size),
-                            "include_over_18": "on",
-                        },
-                    )
+                    try:
+                        listing = self._load_json(
+                            f"/r/{subreddit}/search.json",
+                            {
+                                "q": keyword,
+                                "restrict_sr": "1",
+                                "sort": query.sort,
+                                "t": query.timeframe,
+                                "limit": str(self.config.search_batch_size),
+                                "include_over_18": "on",
+                            },
+                        )
+                    except RedditRequestError as exc:
+                        if exc.status_code == 403:
+                            print(
+                                f"[collector] reddit search 403 for r/{subreddit}; "
+                                "fallback to subreddit listings",
+                                flush=True,
+                            )
+                            search_failed = True
+                            break
+                        raise SystemExit(str(exc)) from exc
                     posts = self._extract_posts(listing, seen_ids)
                     if posts:
                         yield PostBatch(posts=posts, source_label=f"{subreddit}:{keyword}")
+                if search_failed:
+                    yield from self._iter_listing_batches(subreddit, query, seen_ids, keywords)
             else:
-                listing_sort = query.sort if query.sort in {"hot", "new", "top"} else "top"
-                params = {"limit": str(self.config.search_batch_size)}
-                if listing_sort == "top":
-                    params["t"] = query.timeframe
+                yield from self._iter_listing_batches(subreddit, query, seen_ids, ())
+
+    def _iter_listing_batches(
+        self,
+        subreddit: str,
+        query: CollectorQuery,
+        seen_ids: set[str],
+        keywords: tuple[str, ...],
+    ) -> Iterable[PostBatch]:
+        sorts = self._fallback_sorts(query)
+        for listing_sort in sorts:
+            params = {"limit": str(self.config.search_batch_size)}
+            if listing_sort == "top":
+                params["t"] = query.timeframe
+            try:
                 listing = self._load_json(f"/r/{subreddit}/{listing_sort}.json", params)
-                posts = self._extract_posts(listing, seen_ids)
-                if posts:
-                    yield PostBatch(posts=posts, source_label=f"{subreddit}:{listing_sort}")
+            except RedditRequestError as exc:
+                raise SystemExit(str(exc)) from exc
+            posts = self._extract_posts(listing, seen_ids)
+            if keywords:
+                posts = tuple(post for post in posts if self._matches_keywords(post, keywords))
+            if posts:
+                label = f"{subreddit}:{listing_sort}:fallback" if keywords else f"{subreddit}:{listing_sort}"
+                yield PostBatch(posts=posts, source_label=label)
+
+    @staticmethod
+    def _fallback_sorts(query: CollectorQuery) -> tuple[str, ...]:
+        primary = query.sort if query.sort in {"hot", "new", "top"} else "top"
+        ordered: list[str] = [primary]
+        for candidate in ("hot", "top", "new"):
+            if candidate not in ordered:
+                ordered.append(candidate)
+        return tuple(ordered)
+
+    @staticmethod
+    def _matches_keywords(post: RedditPost, keywords: tuple[str, ...]) -> bool:
+        haystack = f"{post.title}\n{post.body}".lower()
+        return any(keyword.lower() in haystack for keyword in keywords)
 
     def _get_keywords_for_run(self, query: CollectorQuery) -> tuple[str, ...]:
         if not query.keywords:
@@ -160,7 +212,7 @@ class RedditClient:
                     )
                     time.sleep(self.config.reddit_retry_delay_seconds)
                     continue
-                raise SystemExit(f"Reddit HTTP error {exc.code} for {path}: {details}") from exc
+                raise RedditRequestError(exc.code, path, details) from exc
             except error.URLError as exc:
                 if attempt < attempts:
                     time.sleep(self.config.reddit_retry_delay_seconds)

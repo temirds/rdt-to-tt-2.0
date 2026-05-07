@@ -21,6 +21,13 @@ class VideoConfig:
     preset: str = "veryfast"
     backgrounds_dir: Path = MODULE_ROOT / "assets" / "backgrounds"
     cache_dir: Path = MODULE_ROOT / "cache"
+    background_usage_db_path: Path | None = None
+    fonts_dir: Path = MODULE_ROOT / "fonts"
+    music_dir: Path = MODULE_ROOT / "music"
+    sfx_dir: Path = MODULE_ROOT / "sfx"
+    music_volume: float = 0.03
+    sfx_volume: float = 1.5
+    tail_seconds: float = 1.0
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     default_output_dir: Path = Path("out")
@@ -44,6 +51,12 @@ class VideoConfig:
     answer_font_size: int = 64
     text_margin_v: int = 260
     text_margin_h: int = 90
+    subtitle_outline: int = 8
+    subtitle_shadow: int = 2
+    word_seconds: float = 0.55
+    word_timestamps: bool = True
+    whisper_model: str = "base"
+    whisper_language: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +82,13 @@ def load_video_settings(path: Path = DEFAULT_CONFIG_PATH) -> LoadedVideoSettings
         preset=str(video_raw.get("preset", VideoConfig.preset)),
         backgrounds_dir=_resolve_path(video_raw.get("backgrounds_dir", "assets/backgrounds"), path.parent.parent),
         cache_dir=_resolve_path(video_raw.get("cache_dir", "cache"), path.parent.parent),
+        background_usage_db_path=_resolve_optional_path(video_raw.get("background_usage_db_path"), path.parent.parent),
+        fonts_dir=_resolve_path(video_raw.get("fonts_dir", "fonts"), path.parent.parent),
+        music_dir=_resolve_path(video_raw.get("music_dir", "music"), path.parent.parent),
+        sfx_dir=_resolve_path(video_raw.get("sfx_dir", "sfx"), path.parent.parent),
+        music_volume=float(video_raw.get("music_volume", VideoConfig.music_volume)),
+        sfx_volume=float(video_raw.get("sfx_volume", VideoConfig.sfx_volume)),
+        tail_seconds=float(video_raw.get("tail_seconds", VideoConfig.tail_seconds)),
         ffmpeg_path=str(video_raw.get("ffmpeg_path", VideoConfig.ffmpeg_path)),
         ffprobe_path=str(video_raw.get("ffprobe_path", VideoConfig.ffprobe_path)),
         default_output_dir=_resolve_path(video_raw.get("default_output_dir", "../out"), path.parent.parent),
@@ -81,6 +101,12 @@ def load_video_settings(path: Path = DEFAULT_CONFIG_PATH) -> LoadedVideoSettings
         answer_font_size=int(style_raw.get("answer_font_size", VideoConfig.answer_font_size)),
         text_margin_v=int(style_raw.get("text_margin_v", VideoConfig.text_margin_v)),
         text_margin_h=int(style_raw.get("text_margin_h", VideoConfig.text_margin_h)),
+        subtitle_outline=int(style_raw.get("subtitle_outline", VideoConfig.subtitle_outline)),
+        subtitle_shadow=int(style_raw.get("subtitle_shadow", VideoConfig.subtitle_shadow)),
+        word_seconds=float(style_raw.get("word_seconds", VideoConfig.word_seconds)),
+        word_timestamps=bool(style_raw.get("word_timestamps", VideoConfig.word_timestamps)),
+        whisper_model=str(style_raw.get("whisper_model", VideoConfig.whisper_model)),
+        whisper_language=str(style_raw.get("whisper_language", VideoConfig.whisper_language)),
     )
     return LoadedVideoSettings(config=config, path=path)
 
@@ -96,6 +122,12 @@ def _resolve_path(value: str | Path, base_dir: Path) -> Path:
     if path.is_absolute():
         return path
     return (base_dir / path).resolve()
+
+
+def _resolve_optional_path(value: str | Path | None, base_dir: Path) -> Path | None:
+    if value is None or not str(value).strip():
+        return None
+    return _resolve_path(value, base_dir)
 
 
 def _to_tuple(values: Any) -> tuple[str, ...]:

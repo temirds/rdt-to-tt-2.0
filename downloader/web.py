@@ -710,6 +710,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="checks">
           <label class="check"><input id="withAudio" type="checkbox"> With audio</label>
           <label class="check"><input id="preferMp4" type="checkbox" checked> Prefer MP4</label>
+          <label class="check"><input id="downloadPlaylist" type="checkbox"> Download playlist</label>
         </div>
         <div class="actions">
           <button id="downloadBtn">Download</button>
@@ -751,6 +752,7 @@ INDEX_HTML = r"""<!doctype html>
       $('quality').value = config.default_quality || 'best';
       $('withAudio').checked = Boolean(config.with_audio);
       $('preferMp4').checked = Boolean(config.prefer_mp4);
+      $('downloadPlaylist').checked = !Boolean(config.no_playlist);
     }
 
     async function fetchVideoInfo() {
@@ -844,7 +846,7 @@ INDEX_HTML = r"""<!doctype html>
         cookies_output_path: $('cookiesPath').value.trim(),
         ffmpeg_location: $('ffmpegLocation').value.trim(),
         prefer_mp4: $('preferMp4').checked,
-        no_playlist: true
+        no_playlist: !$('downloadPlaylist').checked
       };
     }
 

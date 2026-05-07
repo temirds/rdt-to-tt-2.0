@@ -6,8 +6,15 @@
     "fps": 30,
     "crf": 20,
     "preset": "veryfast",
-    "backgrounds_dir": "assets/backgrounds",
+    "backgrounds_dir": "../input",
     "cache_dir": "cache",
+    "background_usage_db_path": "cache/background_usage.sqlite3",
+    "fonts_dir": "fonts",
+    "music_dir": "music",
+    "sfx_dir": "sfx",
+    "music_volume": 0.04,
+    "sfx_volume": 1.3,
+    "tail_seconds": 1.5,
     "ffmpeg_path": "ffmpeg",
     "ffprobe_path": "ffprobe",
     "default_output_dir": "../out",
@@ -28,10 +35,16 @@
     "urls": []
   },
   "style": {
-    "font_name": "Arial",
-    "question_font_size": 58,
-    "answer_font_size": 64,
+    "font_name": "Exo 2 Black",
+    "question_font_size": 96,
+    "answer_font_size": 96,
     "text_margin_v": 260,
-    "text_margin_h": 90
+    "text_margin_h": 90,
+    "subtitle_outline": 8,
+    "subtitle_shadow": 2,
+    "word_seconds": 0.55,
+    "word_timestamps": true,
+    "whisper_model": "base",
+    "whisper_language": ""
   }
 }

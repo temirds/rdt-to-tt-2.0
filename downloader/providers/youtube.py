@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from ..base import DownloadOptions, DownloadResult
 from ..config import DEFAULT_CONFIG_PATH, DownloaderConfig, load_downloader_settings
+from ..filenames import normalize_file_paths
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -255,7 +256,7 @@ def _is_retryable_format_error(error: str) -> bool:
 
 
 def _build_result(url: str, info: dict[str, Any] | None, success: bool, error: str | None) -> DownloadResult:
-    filepaths = tuple(_collect_filepaths(info or {}))
+    filepaths = normalize_file_paths(_collect_filepaths(info or {}))
     return DownloadResult(
         url=url,
         success=success,
@@ -270,6 +271,9 @@ def _build_result(url: str, info: dict[str, Any] | None, success: bool, error: s
 
 def _collect_filepaths(info: dict[str, Any]) -> list[Path]:
     paths: list[Path] = []
+    for entry in info.get("entries") or ():
+        if isinstance(entry, dict):
+            paths.extend(_collect_filepaths(entry))
     for item in info.get("requested_downloads") or ():
         filepath = item.get("filepath") or item.get("filename")
         if filepath:

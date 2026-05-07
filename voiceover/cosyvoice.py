@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import subprocess
 import sys
@@ -112,7 +113,7 @@ class CosyVoiceVoiceoverEngine:
         )
         try:
             model = load_model(self.settings)
-            audio_parts, sample_rate = synthesize_sequence(
+            audio_parts, sample_rate, timings = synthesize_sequence(
                 model=model,
                 request=request,
                 prompt_audio=prompt_audio,
@@ -126,6 +127,7 @@ class CosyVoiceVoiceoverEngine:
                 raise SystemExit(f"CosyVoice returned too short audio: {duration:.2f}s")
 
             save_wav(request.output_path, audio, sample_rate)
+            save_sequence_timings(request.output_path, timings)
             return VoiceoverResult(
                 output_path=request.output_path,
                 duration_seconds=duration,
@@ -368,6 +370,8 @@ def synthesize_sequence(
     audio_parts = []
     sample_rate: int | None = None
     channel_count: int | None = None
+    cursor_frames = 0
+    timings: list[dict[str, float | str]] = []
 
     for segment in request.segments:
         audio, current_sample_rate = synthesize_with_model(
@@ -381,16 +385,36 @@ def synthesize_sequence(
             sample_rate = current_sample_rate
             channel_count = audio.shape[0]
         audio_parts.append(audio)
+        start_frames = cursor_frames
+        cursor_frames += audio.shape[-1]
+        end_frames = cursor_frames
+        timings.append(
+            {
+                "text": segment.text,
+                "start_seconds": start_frames / sample_rate,
+                "end_seconds": end_frames / sample_rate,
+                "pause_after_seconds": max(0.0, float(segment.pause_after_seconds)),
+            }
+        )
 
         pause_seconds = float(segment.pause_after_seconds)
         if pause_seconds > 0:
             pause_frames = max(1, int(round(sample_rate * pause_seconds)))
             audio_parts.append(torch.zeros((channel_count, pause_frames), dtype=audio.dtype))
+            cursor_frames += pause_frames
 
     if sample_rate is None or channel_count is None or not audio_parts:
         raise SystemExit("CosyVoice returned no audio.")
 
-    return audio_parts, sample_rate
+    return audio_parts, sample_rate, timings
+
+
+def save_sequence_timings(output_path: Path, timings: list[dict[str, float | str]]) -> None:
+    timings_path = output_path.with_suffix(".timings.json")
+    timings_path.write_text(
+        json.dumps({"segments": timings}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def concatenate_audio_parts(audio_parts):
